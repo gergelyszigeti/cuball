@@ -1,0 +1,185 @@
+<html lang="en">
+<head>
+<link rel="stylesheet" href="canvas.css">
+</head>
+
+<body>
+
+<!--<canvas id="c"  width="1280" height="720" style="border:1px solid"></canvas>-->
+<canvas id="c"></canvas>
+<script  id="vertex-shader-2d" type="notjs">
+
+  // an attribute will receive data from a buffer
+  attribute vec4 a_position;
+
+  // all shaders have a main function
+  void main() {
+
+    // gl_Position is a special variable a vertex shader
+    // is responsible for setting
+    gl_Position = a_position;
+  }
+
+</script>
+<script  id="fragment-shader-2d" type="notjs">
+
+  // fragment shaders don't have a default precision so we need
+  // to pick one. mediump is a good default
+  precision mediump float;
+
+  // uniforms used by Shadertoy
+  uniform float iTime;
+  uniform vec2 iResolution;
+
+// ray marching
+const int   max_iterations = 64;
+const float stop_threshold = 0.001;
+const float grad_step = 0.02;
+const float clip_far = 4.0;
+
+const vec3 light_color_sphere = vec3( 1.0, 0.3, 0.0 );
+const vec3 light_color_cube   = vec3( 0.3, 1.0, 0.0);
+// math
+const float PI = 3.14159265359;
+const float DEG_TO_RAD = PI / 180.0;
+
+// iq's distance function
+float sdSphere( vec3 pos, float r ) {
+    return length( pos ) - r;
+}
+
+float sdBox( vec3 p, vec3 b ) {
+    vec3 d = abs(p) - b;
+    return min(max(d.x,max(d.y,d.z)),0.0) + length(max(d,0.0));
+}
+
+// get distance in the world
+float dist_field( vec3 p ) {
+    
+    float d0 = sdBox( p, vec3(0.5) );
+    float d1 = sdSphere( p, 0.6 );
+    
+    float d = mix( d1, d0, abs( sin(iTime*2.0)));
+
+    return d;
+}
+
+// get gradient in the world
+vec3 gradient( vec3 pos ) {
+    const vec3 dx = vec3( grad_step, 0.0, 0.0 );
+    const vec3 dy = vec3( 0.0, grad_step, 0.0 );
+    const vec3 dz = vec3( 0.0, 0.0, grad_step );
+    return normalize (
+        vec3(
+            dist_field( pos + dx ) - dist_field( pos - dx ),
+            dist_field( pos + dy ) - dist_field( pos - dy ),
+            dist_field( pos + dz ) - dist_field( pos - dz )			
+            )
+    );
+}
+
+// phong shading
+vec3 shadingcam( vec3 v, vec3 n, vec3 dir, vec3 eye ) {
+
+    // light on camera
+    vec3 light_pos = eye;
+    vec3 light_color = mix(light_color_sphere,
+                           light_color_cube,
+                           abs( sin(iTime*2.0))
+                          );
+    
+    vec3 vl = normalize( light_pos - v );	
+    vec3 diffuse = vec3( max( 0.25, dot( vl, n ) ) );
+	
+    return light_color * diffuse;
+}
+
+// ray marching
+bool ray_marching( vec3 o, vec3 dir, inout float depth, inout vec3 n ) {
+    float t = 0.0;
+    float d = 10000.0;
+    float dt = 0.0;
+    for ( int i = 0; i < max_iterations; i++ ) {
+        vec3 v = o + dir * t;
+        d = dist_field( v );
+        if ( d < stop_threshold || d > depth) {
+            break;
+        }
+        t += d;
+    }
+    
+    // return if we run past max_iterations, or d is greater than the limit
+    if ( d >= stop_threshold ) {
+        return false;
+    }
+    
+    depth = t;
+    n = normalize( gradient( o + dir * t ) );
+    return true;
+}
+
+// get ray direction
+vec3 ray_dir( float fov, vec2 size, vec2 pos ) {
+    vec2 xy = pos - size * 0.5;
+
+    float cot_half_fov = tan( ( 90.0 - fov * 0.5 ) * DEG_TO_RAD );	
+    float z = size.y * 0.5 * cot_half_fov;
+	
+    return normalize( vec3( xy, -z ) );
+}
+
+// camera rotation : pitch, yaw
+mat3 rotationXY( vec2 angle ) {
+    vec2 c = cos( angle );
+    vec2 s = sin( angle );
+	
+    return mat3(
+        c.y      ,  0.0, -s.y,
+        s.y * s.x,  c.x,  c.y * s.x,
+        s.y * c.x, -s.x,  c.y * c.x
+    );
+}
+
+void mainImage( out vec4 fragColor, in vec2 fragCoord )
+{
+    // default ray dir
+    vec3 dir = ray_dir( 45.0, iResolution.xy, fragCoord.xy );
+
+    // default ray origin
+    vec3 eye = vec3( 0.0, 0.0, 2.5 );
+
+    // rotate camera
+    mat3 rot = rotationXY( vec2(sin(iTime*2.4), iTime * 2.0));
+    dir = rot * dir;
+    eye = rot * eye;
+	
+    // ray marching
+    float depth = clip_far;
+    vec3 n = vec3( 0.0 );
+    if ( !ray_marching( eye, dir, depth, n ) ) {
+        fragColor = vec4(vec3(0.3, 0.4, 0.4), 1.0);
+        return;
+    }
+	
+    // shading
+    vec3 pos = eye + dir * depth;
+    
+    vec3 color = shadingcam( pos, n, dir, eye );
+    fragColor = vec4( pow( color, vec3(1.0/1.2) ), 1.0 );
+}
+
+  void main() {
+    mainImage(gl_FragColor, gl_FragCoord.xy);
+  }
+
+
+</script><!--
+for most samples webgl-utils only provides shader compiling/linking and
+canvas resizing because why clutter the examples with code that's the same in every sample.
+See https://webglfundamentals.org/webgl/lessons/webgl-boilerplate.html
+and https://webglfundamentals.org/webgl/lessons/webgl-resizing-the-canvas.html
+for webgl-utils, m3, m4, and webgl-lessons-ui.
+-->
+<script src="webgl-helper.js"></script>
+</body>
+</html>
